@@ -1,0 +1,12 @@
+[package]
+name         = "gtp"
+version      = "0.1.0"
+authors      = ["Weird Constructor <weirdconstructor@gmail.com>"]
+edition      = "2018"
+license      = "GPL-3.0-or-later"
+description  = "GTP (Go Text Protocol) controller implementation for Rust"
+readme       = "README.md"
+keywords     = ["GTP","Go","Baduk","Weiqi","Go Text Protocol","Go Engine","GTP Controller"]
+categories   = ["parsing","parser-implementations","network-programming"]
+
+[dependencies]
