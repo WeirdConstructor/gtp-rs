@@ -8,6 +8,6 @@ description  = "GTP (Go Text Protocol) controller implementation for Rust"
 repository   = "https://github.com/WeirdConstructor/gtp-rs"
 readme       = "README.md"
 keywords     = ["GTP","Go","Baduk","Weiqi","protocol"]
-categories   = ["parsing","parser-implementations","network-programming"]
+categories   = ["parsing","parser-implementations","games"]
 
 [dependencies]
