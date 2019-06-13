@@ -8,8 +8,10 @@ use std::io::Write;
 use std::io::BufRead;
 use std::thread;
 
+use super::ResponseParser;
+
 #[derive(Debug, Clone)]
-enum CapturedOutput {
+pub enum CapturedOutput {
     Stderr(String),
     Stdout(String),
 }
@@ -26,13 +28,13 @@ pub struct DetachedCommand {
 }
 
 #[derive(Debug)]
-enum Error {
+pub enum Error {
     StartupFailed(std::io::Error),
     Disconnected,
 }
 
 impl DetachedCommand {
-    fn start(cmd: &str, args: &[&str]) -> Result<DetachedCommand, Error> {
+    pub fn start(cmd: &str, args: &[&str]) -> Result<DetachedCommand, Error> {
         let mut o = Command::new(cmd);
         o.stdout(Stdio::piped())
          .stderr(Stdio::piped())
@@ -108,43 +110,43 @@ impl DetachedCommand {
         })
     }
 
-    fn send_str(&mut self, s: &str) {
+    pub fn send_str(&mut self, s: &str) {
         let b : Vec<u8> = s.bytes().collect();
         self.send(b);
 //        dc.wr_tx.as_ref().unwrap().send("foobar!\n".to_string());
     }
 
     #[allow(unused_must_use)]
-    fn send(&mut self, buffer: Vec<u8>) {
+    pub fn send(&mut self, buffer: Vec<u8>) {
         self.wr_tx.as_ref().unwrap().send(buffer);
     }
 
     #[allow(dead_code)]
-    fn recv_blocking(&mut self) -> CapturedOutput {
+    pub fn recv_blocking(&mut self) -> CapturedOutput {
         self.rd_rx.as_ref().unwrap().recv().unwrap()
     }
 
-    fn stdout_available(&self) -> bool {
+    pub fn stdout_available(&self) -> bool {
         !self.stdout_chunks.is_empty()
     }
 
-    fn stderr_available(&self) -> bool {
+    pub fn stderr_available(&self) -> bool {
         !self.stderr_chunks.is_empty()
     }
 
-    fn recv_stdout(&mut self) -> String {
+    pub fn recv_stdout(&mut self) -> String {
         let ret : String = self.stdout_chunks.join("");
         self.stdout_chunks.clear();
         ret
     }
 
-    fn recv_stderr(&mut self) -> String {
+    pub fn recv_stderr(&mut self) -> String {
         let ret : String = self.stderr_chunks.join("");
         self.stderr_chunks.clear();
         ret
     }
 
-    fn poll(&mut self) -> Result<(), Error>  {
+    pub fn poll(&mut self) -> Result<(), Error>  {
         if self.rd_rx.is_none() {
             return Err(Error::Disconnected);
         }
@@ -168,7 +170,7 @@ impl DetachedCommand {
     }
 
     #[allow(unused_must_use)]
-    fn shutdown(&mut self) {
+    pub fn shutdown(&mut self) {
         drop(self.wr_tx.take().unwrap());
         self.child.kill();
         self.writer.take().unwrap().join();
@@ -183,7 +185,7 @@ pub fn doit() {
         DetachedCommand::start("gnugo-3.8\\gnugo.exe", &["--mode", "gtp"])
         .expect("failed gnugo");
 
-    let mut rp = gtp::ResponseParser::new();
+    let mut rp = self::ResponseParser::new();
 
     dc.send_str("10 list_commands\n");
     loop {

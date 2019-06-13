@@ -144,7 +144,8 @@ without any additional terms or conditions.
 
 */
 
-mod controller;
+pub mod controller;
+pub mod detached_command;
 
 /// The color of a move
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -178,6 +179,9 @@ pub struct EntityBuilder {
 
 /// Entity building helper function.
 ///
+/// If no entity was constructed in the callback an entity
+/// with an empty string is returned.
+///
 /// ```
 /// use gtp;
 /// assert_eq!(gtp::entity(|eb| eb.v_pass()).to_string(), "pass");
@@ -186,7 +190,11 @@ pub fn entity<T>(f: T) -> Entity
     where T: Fn(&mut EntityBuilder) -> &mut EntityBuilder {
     let mut b = EntityBuilder::new();
     f(&mut b);
-    b.build()
+    if b.has_any() {
+        b.build()
+    } else {
+        Entity::String(String::from(""))
+    }
 }
 
 impl EntityBuilder {
@@ -289,6 +297,8 @@ impl EntityBuilder {
         self.list = Vec::new();
         self
     }
+
+    pub fn has_any(&self) -> bool { self.current.is_some() }
 
     pub fn build(&self) -> Entity {
         self.current.clone().expect("Did not setup any entitiy in EntityBuilder!")
@@ -570,7 +580,7 @@ impl Command {
     /// Shorthand for `Command::new_with_args`.
     pub fn cmd<T>(name: &str, args: T) -> Command
         where T: Fn(&mut EntityBuilder) -> &mut EntityBuilder {
-        new_with_args(name, args)
+        Command::new_with_args(name, args)
     }
 
     /// Sets the ID of the command.
@@ -599,7 +609,9 @@ impl Command {
         where T: Fn(&mut EntityBuilder) -> &mut EntityBuilder {
         let mut b = EntityBuilder::new();
         f(&mut b);
-        self.set_args(&b.build());
+        if b.has_any() {
+            self.set_args(&b.build());
+        }
     }
 
 
