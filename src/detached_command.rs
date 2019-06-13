@@ -12,13 +12,14 @@ enum CapturedOutput {
 }
 
 pub struct DetachedCommand {
-    child:  std::process::Child,
-    reader: Option<std::thread::JoinHandle<()>>,
-    writer: Option<std::thread::JoinHandle<()>>,
-    rd_rx:  Option<mpsc::Receiver<CapturedOutput>>,
-    wr_tx:  Option<mpsc::Sender<Vec<u8>>>,
-    stdout_chunks: Vec<String>,
-    stderr_chunks: Vec<String>,
+    child:          std::process::Child,
+    reader:         Option<std::thread::JoinHandle<()>>,
+    err_reader:     Option<std::thread::JoinHandle<()>>,
+    writer:         Option<std::thread::JoinHandle<()>>,
+    rd_rx:          Option<mpsc::Receiver<CapturedOutput>>,
+    wr_tx:          Option<mpsc::Sender<Vec<u8>>>,
+    stdout_chunks:  Vec<String>,
+    stderr_chunks:  Vec<String>,
 }
 
 #[derive(Debug)]
@@ -28,7 +29,7 @@ enum Error {
 }
 
 impl DetachedCommand {
-    fn start(cmd: &str, args: &Vec<&str>) -> Result<DetachedCommand, Error> {
+    fn start(cmd: &str, args: &[&str]) -> Result<DetachedCommand, Error> {
         let mut o = Command::new(cmd);
         o.stdout(Stdio::piped())
          .stderr(Stdio::piped())
@@ -54,17 +55,12 @@ impl DetachedCommand {
 
         let writer = thread::spawn(move || {
             let mut bw = std::io::BufWriter::new(stdin);
-            loop {
-                match stdin_rx.recv() {
-                    Ok(bytes) => {
-                        if let Ok(s) = bw.write(&bytes) {
-                            if s == 0 { break; }
-                            if let Err(_) = bw.flush() { break; }
-                        } else {
-                            break;
-                        }
-                    },
-                    Err(_) => break,
+            while let Ok(bytes) = stdin_rx.recv() {
+                if let Ok(s) = bw.write(&bytes) {
+                    if s == 0 { break; }
+                    if bw.flush().is_err() { break; }
+                } else {
+                    break;
                 }
             };
         });
@@ -75,7 +71,7 @@ impl DetachedCommand {
             loop {
                 let mut line = String::from("");
                 if let Ok(s) = br.read_line(&mut line) {
-                    if let Err(_) = tx_stdout.send(CapturedOutput::Stdout(line)) { break; }
+                    if tx_stdout.send(CapturedOutput::Stdout(line)).is_err() { break; }
                     if s == 0 { break; }
                 } else {
                     break;
@@ -89,7 +85,7 @@ impl DetachedCommand {
             loop {
                 let mut line = String::from("");
                 if let Ok(s) = br.read_line(&mut line) {
-                    if let Err(_) = tx_stderr.send(CapturedOutput::Stderr(line)) { break; }
+                    if tx_stderr.send(CapturedOutput::Stderr(line)).is_err() { break; }
                     if s == 0 { break; }
                 } else {
                     break;
@@ -102,6 +98,7 @@ impl DetachedCommand {
             stderr_chunks:      Vec::new(),
             stdout_chunks:      Vec::new(),
             reader:             Some(reader),
+            err_reader:         Some(err_reader),
             writer:             Some(writer),
             rd_rx:              Some(rx),
             wr_tx:              Some(stdin_tx),
@@ -114,20 +111,22 @@ impl DetachedCommand {
 //        dc.wr_tx.as_ref().unwrap().send("foobar!\n".to_string());
     }
 
+    #[allow(unused_must_use)]
     fn send(&mut self, buffer: Vec<u8>) {
         self.wr_tx.as_ref().unwrap().send(buffer);
     }
 
+    #[allow(dead_code)]
     fn recv_blocking(&mut self) -> CapturedOutput {
         self.rd_rx.as_ref().unwrap().recv().unwrap()
     }
 
     fn stdout_available(&self) -> bool {
-        return !self.stdout_chunks.is_empty();
+        !self.stdout_chunks.is_empty()
     }
 
     fn stderr_available(&self) -> bool {
-        return !self.stderr_chunks.is_empty();
+        !self.stderr_chunks.is_empty()
     }
 
     fn recv_stdout(&mut self) -> String {
@@ -165,18 +164,20 @@ impl DetachedCommand {
         }
     }
 
+    #[allow(unused_must_use)]
     fn shutdown(&mut self) {
         drop(self.wr_tx.take().unwrap());
         self.child.kill();
         self.writer.take().unwrap().join();
         self.reader.take().unwrap().join();
+        self.err_reader.take().unwrap().join();
     }
 }
 
 pub fn doit() {
     println!("FOO {}", std::env::current_dir().unwrap().to_str().unwrap());
     let mut dc =
-        DetachedCommand::start("gnugo-3.8\\gnugo.exe", &vec!["--mode", "gtp"])
+        DetachedCommand::start("gnugo-3.8\\gnugo.exe", &["--mode", "gtp"])
         .expect("failed gnugo");
 
     let mut rp = gtp::ResponseParser::new();
@@ -190,7 +191,12 @@ pub fn doit() {
             println!("Error in poll: {:?}", p.unwrap_err());
             break;
 
-        } else if dc.stdout_available() {
+        }
+        if dc.stderr_available() {
+            println!("err: {}", dc.recv_stderr());
+        }
+
+        if dc.stdout_available() {
             rp.feed(&dc.recv_stdout());
 
             if let Ok(resp) = rp.get_response() {

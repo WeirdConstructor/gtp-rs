@@ -144,8 +144,6 @@ without any additional terms or conditions.
 
 */
 
-use std::io::Write;
-
 /// The color of a move
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Color {
@@ -170,7 +168,7 @@ pub enum Color {
 /// let ent = gtp::entity(|eb| eb.v((19, 19)));
 /// assert_eq!(ent.to_string(), "T19");
 /// ```
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct EntityBuilder {
     list:    Vec<Entity>,
     current: Option<Entity>,
@@ -195,10 +193,7 @@ impl EntityBuilder {
     /// Please note there are helper functions like [`entity`](fn.entity.html)
     /// Or [`args` of Command](struct.Command.html#method.args).
     pub fn new() -> EntityBuilder {
-        EntityBuilder {
-            list: Vec::new(),
-            current: None,
-        }
+        EntityBuilder::default()
     }
 
     pub fn i(&mut self, i: u32) -> &mut Self {
@@ -332,7 +327,7 @@ impl std::fmt::Display for Entity {
             Entity::Vertex((h, v)) => {
                 let mut s = String::from("");
                 if *h <= 0 || *v <= 0 {
-                    s += &format!("pass");
+                    s += &"pass".to_string();
                 } else {
                     s += &format!("{}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
@@ -344,7 +339,7 @@ impl std::fmt::Display for Entity {
             Entity::Move((Color::W, (h, v))) => {
                 let mut s = String::from("");
                 if *h <= 0 || *v <= 0 {
-                    s += &format!("w pass");
+                    s += &"w pass".to_string();
                 } else {
                     s += &format!("w {}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
@@ -354,7 +349,7 @@ impl std::fmt::Display for Entity {
             Entity::Move((Color::B, (h, v))) => {
                 let mut s = String::from("");
                 if *h <= 0 || *v <= 0 {
-                    s += &format!("b pass");
+                    s += &"b pass".to_string();
                 } else {
                     s += &format!("b {}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
@@ -366,7 +361,7 @@ impl std::fmt::Display for Entity {
             Entity::List(vec) => {
 
                 let mut s = String::from("");
-                if vec.is_empty() { write!(f, ""); }
+                if vec.is_empty() { return write!(f, ""); }
 
                 // Try to handle at least 2 dimensional lists
                 // on output correctly:
@@ -393,21 +388,10 @@ pub struct EntityParser {
     parse_error:    bool,
 }
 
-impl EntityParser {
-    pub fn new(s: &str) -> Self {
-        EntityParser {
-            buffer:     String::from(s),
-            entities:   Vec::new(),
-            parse_error: false,
-        }
-    }
+impl std::iter::Iterator for EntityParser {
+    type Item = String;
 
-    pub fn result(&self) -> Option<Vec<Entity>> {
-        if self.parse_error { return None; }
-        return Some(self.entities.clone());
-    }
-
-    pub fn next(&mut self) -> String {
+    fn next(&mut self) -> Option<String> {
         self.buffer = self.buffer.chars().skip_while(|c| *c == ' ' || *c == '\n').collect();
 
         let mut s = String::from("");
@@ -419,21 +403,38 @@ impl EntityParser {
         }
 
         self.buffer = self.buffer.chars().skip(skip_count).collect();
-        s
+
+        if s.is_empty() { None } else { Some(s) }
+    }
+
+}
+
+impl EntityParser {
+    pub fn new(s: &str) -> Self {
+        EntityParser {
+            buffer:     String::from(s),
+            entities:   Vec::new(),
+            parse_error: false,
+        }
+    }
+
+    pub fn result(&self) -> Option<Vec<Entity>> {
+        if self.parse_error { return None; }
+        Some(self.entities.clone())
     }
 
     pub fn is_eof(&self) -> bool { self.buffer.is_empty() }
     pub fn had_parse_error(&self) -> bool { self.parse_error }
 
     pub fn s(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         if s.is_empty() { self.parse_error = true; return self; }
         self.entities.push(Entity::String(s));
         self
     }
 
     pub fn i(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         if let Ok(i) = s.parse::<u32>() {
             self.entities.push(Entity::Int(i));
         } else {
@@ -443,7 +444,7 @@ impl EntityParser {
     }
 
     pub fn f(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         if let Ok(f) = s.parse::<f32>() {
             self.entities.push(Entity::Float(f));
         } else {
@@ -453,7 +454,7 @@ impl EntityParser {
     }
 
     pub fn color(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         let s = s.to_lowercase();
         if s == "w" || s == "white" { self.entities.push(Entity::Color(Color::W)); return self; }
         if s == "b" || s == "black" { self.entities.push(Entity::Color(Color::B)); return self; }
@@ -462,7 +463,7 @@ impl EntityParser {
     }
 
     pub fn vertex(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         let s = s.to_uppercase();
         if s == "PASS" { self.entities.push(Entity::Vertex((0, 0))); return self; }
         if s.len() < 2 || s.len() > 3 {
@@ -510,7 +511,7 @@ impl EntityParser {
     }
 
     pub fn bool(&mut self) -> &mut Self {
-        let s = self.next();
+        let s = self.next().unwrap_or_else(|| String::from(""));
         let s = s.to_uppercase();
         if s == "TRUE" { self.entities.push(Entity::Boolean(true)); return self; }
         if s == "FALSE" { self.entities.push(Entity::Boolean(false)); return self; }
@@ -615,7 +616,7 @@ impl Command {
         }
         out += &self.name;
 
-        if !self.args.is_none() {
+        if self.args.is_some() {
             out += " ";
             out += &self.args.as_ref().unwrap().to_string();
         }
@@ -714,7 +715,7 @@ impl Response {
 }
 
 /// A parser for a GTP response.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ResponseParser {
     buffer:     String,
 }
@@ -762,7 +763,7 @@ impl ResponseParser {
     /// assert_eq!(format!("{:?}", s), "Result((None, \"ok\"))");
     /// ```
     pub fn new() -> ResponseParser {
-        ResponseParser { buffer: String::from("") }
+        ResponseParser::default()
     }
 
     /// Feed the response text to the parser.
@@ -775,6 +776,7 @@ impl ResponseParser {
     /// Returns `Ok(None)` if no response is available yet.
     /// Returns an error if the response is malformed.
     /// Returns the Ok([`Response`](enum.Response.html)) if one could be read.
+    #[allow(unused_assignments, clippy::collapsible_if)]
     pub fn get_response(&mut self) -> Result<Response, ResponseError> {
         self.buffer = refine_input(self.buffer.to_string());
         if self.buffer.is_empty() { return Err(ResponseError::IncompleteResponse); }
@@ -792,6 +794,7 @@ impl ResponseParser {
         let mut found_end        = false;
         let mut last_was_newline = false;
         let mut skip_count       = 1;
+
         for c in self.buffer.chars().skip(1) {
             skip_count += 1;
 
