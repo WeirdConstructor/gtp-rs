@@ -144,6 +144,8 @@ without any additional terms or conditions.
 
 */
 
+use std::io::Write;
+
 /// The color of a move
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Color {
@@ -321,12 +323,12 @@ fn gen_move_char(i: u32) -> char {
     }
 }
 
-impl Entity {
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for Entity {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Entity::Int(i)      => format!("{}", i),
-            Entity::Float(f)    => format!("{}", f),
-            Entity::String(s)   => format!("{}", s),
+            Entity::Int(i)      => write!(f, "{}", i),
+            Entity::Float(n)    => write!(f, "{}", n),
+            Entity::String(s)   => write!(f, "{}", s),
             Entity::Vertex((h, v)) => {
                 let mut s = String::from("");
                 if *h <= 0 || *v <= 0 {
@@ -335,10 +337,10 @@ impl Entity {
                     s += &format!("{}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
                 }
-                s
+                write!(f, "{}", s)
             },
-            Entity::Color(Color::W) => format!("w"),
-            Entity::Color(Color::B) => format!("b"),
+            Entity::Color(Color::W) => write!(f, "w"),
+            Entity::Color(Color::B) => write!(f, "b"),
             Entity::Move((Color::W, (h, v))) => {
                 let mut s = String::from("");
                 if *h <= 0 || *v <= 0 {
@@ -347,7 +349,7 @@ impl Entity {
                     s += &format!("w {}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
                 }
-                s
+                write!(f, "{}", s)
             },
             Entity::Move((Color::B, (h, v))) => {
                 let mut s = String::from("");
@@ -357,14 +359,14 @@ impl Entity {
                     s += &format!("b {}", gen_move_char(*h as u32));
                     s += &format!("{}", v);
                 }
-                s
+                write!(f, "{}", s)
             },
-            Entity::Boolean(true) => format!("true"),
-            Entity::Boolean(false) => format!("false"),
+            Entity::Boolean(true) => write!(f, "true"),
+            Entity::Boolean(false) => write!(f, "false"),
             Entity::List(vec) => {
 
                 let mut s = String::from("");
-                if vec.is_empty() { return s; }
+                if vec.is_empty() { write!(f, ""); }
 
                 // Try to handle at least 2 dimensional lists
                 // on output correctly:
@@ -378,7 +380,7 @@ impl Entity {
                     if i > 0 { s += sep; }
                     s += &e.to_string();
                 }
-                s
+                write!(f, "{}", s)
             }
         }
     }
@@ -644,10 +646,24 @@ pub enum ResponseParseError {
 }
 
 impl Response {
+    /// Returns the complete response text, which you may feed into EntityParser.
+    ///
+    /// See also the `Response::entities` method.
     pub fn text(&self) -> String {
         match self {
             Response::Error((_, t))  => t.clone(),
             Response::Result((_, t)) => t.clone(),
+        }
+    }
+
+    /// Returns the ID of the response. Returns 0 if no
+    /// ID was submitted.
+    pub fn id_0(&self) -> u32 {
+        match self {
+            Response::Error((None, _))          => 0,
+            Response::Result((None, _))         => 0,
+            Response::Error((Some(id), _))      => *id,
+            Response::Result((Some(id), _))     => *id,
         }
     }
 
@@ -683,11 +699,10 @@ impl Response {
     pub fn entities<T>(&self, parse_fn: T) -> Result<Vec<Entity>, ResponseParseError>
         where T: Fn(&mut EntityParser) -> &mut EntityParser  {
 
-        let mut response = String::from("");
-        match self {
-            Response::Result((_, res)) => { response = res.to_string(); },
-            Response::Error((_, res))  => { response = res.to_string(); },
-        }
+        let response = match self {
+            Response::Result((_, res)) => res.to_string(),
+            Response::Error((_, res))  => res.to_string(),
+        };
 
         let mut ep = EntityParser::new(&response);
         parse_fn(&mut ep);

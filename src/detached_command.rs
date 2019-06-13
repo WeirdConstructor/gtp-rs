@@ -1,24 +1,24 @@
 use std::process::Command;
-//use std::process::Child;
 use std::process::Stdio;
 use std::sync::mpsc;
-use std::cell::RefCell;
-use std::rc::Rc;
-//use std::io::BufWriter;
-//use std::io::BufReader;
 use std::io::Write;
-use std::io::Read;
 use std::io::BufRead;
 use std::thread;
+
+#[derive(Debug, Clone)]
+enum CapturedOutput {
+    Stderr(String),
+    Stdout(String),
+}
 
 pub struct DetachedCommand {
     child:  std::process::Child,
     reader: Option<std::thread::JoinHandle<()>>,
     writer: Option<std::thread::JoinHandle<()>>,
-    rd_rx:  Option<mpsc::Receiver<String>>,
+    rd_rx:  Option<mpsc::Receiver<CapturedOutput>>,
     wr_tx:  Option<mpsc::Sender<Vec<u8>>>,
-    on_stdout: Option<Box<Fn(&str)>>,
-    on_stderr: Option<Box<Fn(&str)>>,
+    stdout_chunks: Vec<String>,
+    stderr_chunks: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -31,13 +31,14 @@ impl DetachedCommand {
     fn start(cmd: &str, args: &Vec<&str>) -> Result<DetachedCommand, Error> {
         let mut o = Command::new(cmd);
         o.stdout(Stdio::piped())
+         .stderr(Stdio::piped())
          .stdin(Stdio::piped());
 
         for arg in args.iter() {
             o.arg(arg);
         }
 
-        let mut o = o.spawn();
+        let o = o.spawn();
 
         if let Err(io_err) = o {
             return Err(Error::StartupFailed(io_err));
@@ -47,12 +48,12 @@ impl DetachedCommand {
 
         let stdin    = o.stdin.take().unwrap();
         let stdout   = o.stdout.take().unwrap();
+        let stderr   = o.stderr.take().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (stdin_tx , stdin_rx) : (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = std::sync::mpsc::channel();
 
         let writer = thread::spawn(move || {
             let mut bw = std::io::BufWriter::new(stdin);
-            let mut i = 0;
             loop {
                 match stdin_rx.recv() {
                     Ok(bytes) => {
@@ -68,13 +69,27 @@ impl DetachedCommand {
             };
         });
 
+        let tx_stdout = tx.clone();
         let reader = thread::spawn(move || {
             let mut br = std::io::BufReader::new(stdout);
-            let mut line_cnt = 0;
             loop {
                 let mut line = String::from("");
                 if let Ok(s) = br.read_line(&mut line) {
-                    if let Err(_) = tx.send(line) { break; }
+                    if let Err(_) = tx_stdout.send(CapturedOutput::Stdout(line)) { break; }
+                    if s == 0 { break; }
+                } else {
+                    break;
+                }
+            }
+        });
+
+        let tx_stderr = tx.clone();
+        let err_reader = thread::spawn(move || {
+            let mut br = std::io::BufReader::new(stderr);
+            loop {
+                let mut line = String::from("");
+                if let Ok(s) = br.read_line(&mut line) {
+                    if let Err(_) = tx_stderr.send(CapturedOutput::Stderr(line)) { break; }
                     if s == 0 { break; }
                 } else {
                     break;
@@ -83,13 +98,13 @@ impl DetachedCommand {
         });
 
         Ok(DetachedCommand {
-            child:      o,
-            on_stdout:  None,
-            on_stderr:  None,
-            reader:     Some(reader),
-            writer:     Some(writer),
-            rd_rx:      Some(rx),
-            wr_tx:      Some(stdin_tx),
+            child:              o,
+            stderr_chunks:      Vec::new(),
+            stdout_chunks:      Vec::new(),
+            reader:             Some(reader),
+            writer:             Some(writer),
+            rd_rx:              Some(rx),
+            wr_tx:              Some(stdin_tx),
         })
     }
 
@@ -103,18 +118,28 @@ impl DetachedCommand {
         self.wr_tx.as_ref().unwrap().send(buffer);
     }
 
-    fn recv_blocking(&mut self) -> String {
+    fn recv_blocking(&mut self) -> CapturedOutput {
         self.rd_rx.as_ref().unwrap().recv().unwrap()
     }
 
-    fn set_on_stdout<F>(&mut self, f: F)
-        where F: Fn(&str) + 'static {
-        self.on_stdout = Some(Box::new(f));
+    fn stdout_available(&self) -> bool {
+        return !self.stdout_chunks.is_empty();
     }
 
-    fn set_on_stderr<F>(&mut self, f: F)
-        where F: Fn(&str) + 'static {
-        self.on_stderr = Some(Box::new(f));
+    fn stderr_available(&self) -> bool {
+        return !self.stderr_chunks.is_empty();
+    }
+
+    fn recv_stdout(&mut self) -> String {
+        let ret : String = self.stdout_chunks.join("");
+        self.stdout_chunks.clear();
+        ret
+    }
+
+    fn recv_stderr(&mut self) -> String {
+        let ret : String = self.stderr_chunks.join("");
+        self.stderr_chunks.clear();
+        ret
     }
 
     fn poll(&mut self) -> Result<(), Error>  {
@@ -124,10 +149,11 @@ impl DetachedCommand {
 
         loop {
             match self.rd_rx.as_ref().unwrap().try_recv() {
-                Ok(input) => {
-                    if self.on_stdout.is_some() {
-                        (self.on_stdout.as_ref().unwrap())(&input);
-                    }
+                Ok(CapturedOutput::Stdout(input)) => {
+                    self.stdout_chunks.push(input);
+                },
+                Ok(CapturedOutput::Stderr(input)) => {
+                    self.stderr_chunks.push(input);
                 },
                 Err(mpsc::TryRecvError::Empty) => {
                     return Ok(());
@@ -153,26 +179,43 @@ pub fn doit() {
         DetachedCommand::start("gnugo-3.8\\gnugo.exe", &vec!["--mode", "gtp"])
         .expect("failed gnugo");
 
-    let mut rp = Rc::new(RefCell::new(gtp::ResponseParser::new()));
-    dc.set_on_stdout(move |input| {
-        rp.borrow_mut().feed(input);
+    let mut rp = gtp::ResponseParser::new();
 
-        match rp.borrow_mut().get_response() {
-            Ok(resp) => {
-                println!("INPUT: [{:?}]", resp);
-            },
-            Err(gtp::ResponseError::IncompleteResponse) => (),
-            Err(err) => {
-                println!("Resp error: {:?}", err);
-            }
-        }
-    });
-    dc.send_str("list_commands\n");
+    dc.send_str("10 list_commands\n");
     loop {
         let p = dc.poll();
         if p.is_err() {
+            println!("stdout: [{}]", dc.recv_stdout());
+            println!("stderr: [{}]", dc.recv_stderr());
             println!("Error in poll: {:?}", p.unwrap_err());
             break;
+
+        } else if dc.stdout_available() {
+            rp.feed(&dc.recv_stdout());
+
+            if let Ok(resp) = rp.get_response() {
+                match resp.id_0() {
+                    10 => {
+                        let ents = resp.entities(|ep| { while !ep.is_eof() { ep.s(); } ep }).unwrap();
+                        for cmd in ents.iter() {
+                            println!("command {}", cmd.to_string());
+                        }
+                        dc.send_str("11 showboard\n");
+                    },
+                    11 => {
+                        println!("board: {}", resp.text());
+                        dc.send_str("12 genmove w\n");
+                    },
+                    12 => {
+                        println!("Vertex: {:?}", resp.entities(|ep| ep.vertex()).unwrap()[0]);
+                        dc.send_str("quit\n");
+                    },
+                    _ => {
+                        println!("resp: {}", resp.text());
+                        dc.send_str("quit\n");
+                    },
+                }
+            }
         }
     }
 
