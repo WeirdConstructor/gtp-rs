@@ -38,14 +38,22 @@ Receiving Responses:
 let mut rp = gtp::ResponseParser::new();
 rp.feed("= o");
 rp.feed("k\n\n");
-rp.feed("=\nA\nB\n\n= white b3\n\n");
+rp.feed("= A\nB\nC\n\n= white b3 b T19\n\n");
 
-assert_eq!(rp.get_response().unwrap().unwrap().text(), "ok");
-assert_eq!(rp.get_response().unwrap().unwrap().text(), "\nA\nB\n");
+assert_eq!(rp.get_response().unwrap().text(), "ok");
+assert_eq!(rp.get_response().unwrap().text(), "A\nB\nC");
 
 // And processing entities in the response:
+let ents = rp.get_response().unwrap()
+             .entities(|ep| ep.color().vertex().mv()).unwrap();
+assert_eq!(ents[0].to_string(), "w");
+assert_eq!(ents[1].to_string(), "B3");
+assert_eq!(ents[2].to_string(), "b T19");
 
-let mut ep = gtp::EntityParser::new(&rp.get_response().unwrap().unwrap().text());
+// And processing entities in the response more complicatedly:
+rp.feed("= white b3\n\n");
+
+let mut ep = gtp::EntityParser::new(&rp.get_response().unwrap().text());
 let res = ep.mv().result().unwrap();
 assert_eq!(res[0].to_string(), "w B3");
 
@@ -404,7 +412,7 @@ impl EntityParser {
         let mut skip_count = 0;
         for c in self.buffer.chars() {
             skip_count += 1;
-            if c == ' ' { break; }
+            if c == ' ' || c == '\n' { break; }
             s.push(c);
         }
 
@@ -413,6 +421,7 @@ impl EntityParser {
     }
 
     pub fn is_eof(&self) -> bool { self.buffer.is_empty() }
+    pub fn had_parse_error(&self) -> bool { self.parse_error }
 
     pub fn s(&mut self) -> &mut Self {
         let s = self.next();
@@ -627,12 +636,65 @@ pub enum Response {
     Result((Option<u32>, String)),
 }
 
+#[derive(Debug)]
+pub enum ResponseParseError {
+    NoInput,
+    BadEntityInput,
+    BadResponse
+}
+
 impl Response {
     pub fn text(&self) -> String {
         match self {
             Response::Error((_, t))  => t.clone(),
             Response::Result((_, t)) => t.clone(),
         }
+    }
+
+    /// Parses entities from a Response
+    ///
+    /// ```
+    /// let mut rp = gtp::ResponseParser::new();
+    /// rp.feed("= 10 w H6\n\n");
+    /// let entity_vec =
+    ///     rp.get_response().unwrap()
+    ///       .entities(|ep| ep.i().mv())
+    ///       .unwrap();
+    /// assert_eq!(format!("{:?}", entity_vec),
+    ///            "[Int(10), Move((W, (8, 6)))]");
+    ///
+    /// if let gtp::Entity::Int(i) = entity_vec[0] {
+    ///     assert_eq!(i, 10);
+    /// }
+    /// ```
+    ///
+    /// Here is an example for how to read a variable length list:
+    ///
+    /// ```
+    /// let mut rp = gtp::ResponseParser::new();
+    /// rp.feed("= A\nB\nC\nD\nE\n\n");
+    /// let entity_vec =
+    ///     rp.get_response().unwrap()
+    ///       .entities(|ep| { while !ep.is_eof() { ep.s(); }; ep })
+    ///       .unwrap();
+    /// assert_eq!(format!("{:?}", entity_vec),
+    ///            "[String(\"A\"), String(\"B\"), String(\"C\"), String(\"D\"), String(\"E\")]");
+    /// ```
+    pub fn entities<T>(&self, parse_fn: T) -> Result<Vec<Entity>, ResponseParseError>
+        where T: Fn(&mut EntityParser) -> &mut EntityParser  {
+
+        let mut response = String::from("");
+        match self {
+            Response::Result((_, res)) => { response = res.to_string(); },
+            Response::Error((_, res))  => { response = res.to_string(); },
+        }
+
+        let mut ep = EntityParser::new(&response);
+        parse_fn(&mut ep);
+        if ep.had_parse_error() {
+            return Err(ResponseParseError::BadEntityInput);
+        }
+        Ok(ep.result().unwrap())
     }
 }
 
@@ -644,19 +706,35 @@ pub struct ResponseParser {
 
 /// Error for the ResponseParser.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Error {
-    BadResponse(String)
+pub enum ResponseError {
+    IncompleteResponse,
+    BadResponse(String),
 }
 
-fn refine_input(s: &str) -> String {
-    let s = &s.replace('\x09', " ");
-    let comment_pos = s.find('#');
-    if comment_pos.is_some() {
-        let (new_s, _) = s.split_at(comment_pos.unwrap());
-        new_s.to_string()
-    } else {
-        s.to_string()
+fn refine_input(s: String) -> String {
+    let mut ret : String =
+        s.chars()
+         .filter(|c| *c != '\r')
+         .map(|c| if c == '\x09' { ' ' } else { c })
+         .skip_while(|c| *c == '\n' || *c == ' ' || *c == '\x09')
+         .collect();
+
+    loop {
+        let comment_pos = ret.find('#');
+        if comment_pos.is_some() {
+            let end_comment_pos = (&ret[comment_pos.unwrap()..]).find('\n');
+            if end_comment_pos.is_some() {
+                ret = String::from(&ret[..comment_pos.unwrap()])
+                      + &ret[comment_pos.unwrap() + end_comment_pos.unwrap() + 1..];
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
+
+    ret
 }
 
 impl ResponseParser {
@@ -666,7 +744,6 @@ impl ResponseParser {
     /// let mut rp = gtp::ResponseParser::new();
     /// rp.feed("= ok\n\n");
     /// let s = rp.get_response().unwrap();
-    /// let s = s.unwrap();
     /// assert_eq!(format!("{:?}", s), "Result((None, \"ok\"))");
     /// ```
     pub fn new() -> ResponseParser {
@@ -678,100 +755,31 @@ impl ResponseParser {
         self.buffer += s;
     }
 
-    fn next_line(&mut self) -> Option<String> {
-        self.buffer =
-            self.buffer.chars()
-                .skip_while(|c| *c == '\n' || *c == ' ' || *c == '\x09')
-                .collect();
-
-        let mut s = String::from("");
-
-        let mut skip_count = 0;
-        let mut found_line = false;
-        for c in self.buffer.chars() {
-            skip_count += 1;
-            match c {
-                '\r'    => continue,
-                '\n'    => { found_line = true; break },
-                _       => s.push(c),
-            }
-        }
-
-        if found_line {
-            self.buffer = self.buffer.chars().skip(skip_count).collect();
-            Some(refine_input(&s))
-        } else {
-            None
-        }
-    }
-
-    fn until_end_of_response(&mut self) -> Option<String> {
-        let mut s = String::from("");
-
-        let mut last_is_newline = false;
-        let mut skip_count      = 0;
-        let mut found_end       = false;
-        let mut in_comment      = false;
-
-        for c in self.buffer.chars() {
-            if skip_count == 0 && c == '\n' {
-                found_end = true;
-                break;
-            }
-            skip_count += 1;
-
-            if in_comment && c != '\n' { continue; }
-
-            match c {
-                '#'  => { in_comment      = true; continue; }
-                '\r' => { last_is_newline = false; continue; },
-                '\n' => {
-                    in_comment = false;
-                    if last_is_newline {
-                        found_end = true;
-                        break;
-                    }
-                    s.push(c);
-                    last_is_newline = true;
-                },
-                _ => { last_is_newline = false; s.push(c); },
-            }
-        }
-        println!("REST[{}]", s);
-
-        if found_end {
-            self.buffer = self.buffer.chars().skip(skip_count).collect();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        } else {
-            None
-        }
-    }
-
     /// Tries to read the response from the until now feeded input.
     ///
     /// Returns `Ok(None)` if no response is available yet.
     /// Returns an error if the response is malformed.
     /// Returns the Ok([`Response`](enum.Response.html)) if one could be read.
-    pub fn get_response(&mut self) -> Result<Option<Response>, Error> {
-        let line = self.next_line();
-        if line.is_none() { return Ok(None); }
+    pub fn get_response(&mut self) -> Result<Response, ResponseError> {
+        self.buffer = refine_input(self.buffer.to_string());
+        if self.buffer.is_empty() { return Err(ResponseError::IncompleteResponse); }
 
-        let line = line.unwrap();
-        println!("BUFFER IN GRPli[{}][{}]", line, self.buffer);
-        if line.is_empty() { return Ok(None); }
+        let is_error = self.buffer.chars().nth(0).unwrap() != '=';
 
-        let is_error = line.chars().nth(0).unwrap() != '=';
-
-        let mut id_str = String::from("");
+        let mut id_str   = String::from("");
         let mut response = String::from("");
 
-        let mut read_id = !(line.len() > 1 && line.chars().nth(1).unwrap() == ' ');
-        let mut found_start = false;
-        for c in line.chars().skip(1) {
+        let mut read_id =
+            !(   self.buffer.len() > 1
+              && self.buffer.chars().nth(1).unwrap() == ' ');
+
+        let mut found_start      = false;
+        let mut found_end        = false;
+        let mut last_was_newline = false;
+        let mut skip_count       = 1;
+        for c in self.buffer.chars().skip(1) {
+            skip_count += 1;
+
             if read_id {
                 match c {
                     c if c.is_ascii_digit() => {
@@ -779,25 +787,38 @@ impl ResponseParser {
                     },
                     ' ' => {
                         found_start = true;
-                        read_id = false;
+                        read_id     = false;
                     },
-                    _ => { return Err(Error::BadResponse(line)); }
+                    _ => { return Err(ResponseError::BadResponse(self.buffer.to_string())); }
                 }
             } else if !found_start {
                 if c == ' ' {
                     found_start = true;
                 } else {
-                    return Err(Error::BadResponse(line));
+                    return Err(ResponseError::BadResponse(self.buffer.to_string()));
                 }
             } else {
-                response.push(c);
+                if c == '\n' {
+                    if last_was_newline {
+                        found_end = true;
+                        break;
+                    } else {
+                        last_was_newline = true;
+                    }
+                } else {
+                    if last_was_newline {
+                        response.push('\n');
+                    }
+                    last_was_newline = false;
+                    response.push(c);
+                }
             }
         }
 
-        let rest_resp = self.until_end_of_response();
-        if rest_resp.is_some() {
-            response += "\n";
-            response += rest_resp.as_ref().unwrap();
+        if found_end {
+            self.buffer = self.buffer.chars().skip(skip_count).collect();
+        } else {
+            return Err(ResponseError::IncompleteResponse);
         }
 
         let id = if !id_str.is_empty() {
@@ -810,12 +831,10 @@ impl ResponseParser {
             None
         };
 
-        println!("AT END[{}]", self.buffer);
-
         if is_error {
-            Ok(Some(Response::Error((id, response))))
+            Ok(Response::Error((id, response)))
         } else {
-            Ok(Some(Response::Result((id, response))))
+            Ok(Response::Result((id, response)))
         }
     }
 }
@@ -915,7 +934,6 @@ mod tests {
         let mut rp = ResponseParser::new();
         rp.feed(s);
         let s = rp.get_response().unwrap();
-        let s = s.unwrap();
         s
     }
 
@@ -925,38 +943,47 @@ mod tests {
             let mut rp = ResponseParser::new();
             rp.feed("= ok\n\n");
             let s = rp.get_response().unwrap();
-            let s = s.unwrap();
             assert_eq!(format!("{:?}", s), "Result((None, \"ok\"))");
         }
 
         {
             let mut rp = ResponseParser::new();
             rp.feed("= ok\n\n");
-            rp.feed("=\n\n");
+            rp.feed("= \n\n");
 
-            assert_eq!(rp.get_response().unwrap().unwrap().text(), "ok");
+            assert_eq!(rp.get_response().unwrap().text(), "ok");
+        }
+
+        {
+            let mut rp = ResponseParser::new();
+            rp.feed("= ok\n");
+
+            assert!(rp.get_response().is_err());
         }
 
         let res = must_parse("= ok\nfoobar\n\n");
-        assert_eq!(res.text(), "ok\nfoobar\n");
+        assert_eq!(res.text(), "ok\nfoobar");
 
         assert_eq!(format!("{:?}", must_parse("=10 ok\n\n")),
+                   "Result((Some(10), \"ok\"))");
+
+        assert_eq!(format!("{:?}", must_parse("#\n=10 ok\n\n")),
                    "Result((Some(10), \"ok\"))");
 
         assert_eq!(format!("{:?}", must_parse("= ok\n\n")),
                    "Result((None, \"ok\"))");
 
-        assert_eq!(format!("{:?}", must_parse("=\n\n")),
+        assert_eq!(format!("{:?}", must_parse("= \n\n")),
                    "Result((None, \"\"))");
 
-        assert_eq!(format!("{:?}", must_parse("=\na\nb\nc\n\n")),
-                   "Result((None, \"\\na\\nb\\nc\\n\"))");
+        assert_eq!(format!("{:?}", must_parse("= \na\nb\nc\n\n")),
+                   "Result((None, \"\\na\\nb\\nc\"))");
 
-        assert_eq!(format!("{:?}", must_parse("= foo # all ok\n\n")),
+        assert_eq!(format!("{:?}", must_parse("= foo # all ok\n\n\n")),
                    "Result((None, \"foo \"))");
 
-        assert_eq!(format!("{:?}", must_parse("=\na\nb fooo #fewiofw jfw\nc\n\n")),
-                   "Result((None, \"\\na\\nb fooo \\nc\\n\"))");
+        assert_eq!(format!("{:?}", must_parse("= \na\nb fooo #fewiofw jfw\nc\n\n")),
+                   "Result((None, \"\\na\\nb fooo c\"))");
     }
 
 }
