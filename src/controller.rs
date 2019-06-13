@@ -1,6 +1,8 @@
 // Copyright (c) 2019 Weird Constructor <weirdconstructor@gmail.com>
 // This is a part of gtp-rs. See README.md and COPYING for details.
 
+const WAIT_POLL_DIV : u32 = 4;
+
 pub struct Engine {
     cur_id:     u32,
     cmd:        String,
@@ -64,7 +66,34 @@ impl Engine {
     #[allow(dead_code)]
     fn stderr(&self) -> String { self.stderr.clone() }
 
-    fn poll_response(&mut self) -> Result<super::Response, Error> {
+    /// This method waits for a maximum amount of time for a response
+    /// from the GTP engine.
+    ///
+    /// If no response was received in the given time `Error::PollAgain`
+    /// is returned.
+    pub fn wait_response(&mut self, timeout: std::time::Duration) -> Result<super::Response, Error> {
+        let interval = timeout.checked_div(WAIT_POLL_DIV).unwrap();
+        let instant = std::time::Instant::now();
+
+        loop {
+            match self.poll_response() {
+                Ok(resp)              => return Ok(resp),
+                Err(Error::PollAgain) => (),
+                Err(e)                => return Err(e),
+            }
+
+            if instant.elapsed() > timeout {
+                return Err(Error::PollAgain);
+            }
+
+            std::thread::sleep(interval);
+        }
+    }
+
+    /// This method polls once for a response from the GTP engine.
+    ///
+    /// If no response was found `Error::PollAgain` is returned.
+    pub fn poll_response(&mut self) -> Result<super::Response, Error> {
         if self.handle.is_none() { return Err(Error::NoHandle); }
 
         let hdl = self.handle.as_mut().unwrap();
@@ -104,31 +133,11 @@ mod tests {
         assert!(ctrl.start().is_ok());
 
         ctrl.send(Command::cmd("name", |e| e));
-
-        let mut s = String::from("");
-        loop {
-            println!("POLL...");
-            let resp = ctrl.poll_response();
-            match resp {
-                Ok(resp) => {
-                    println!("RESP: {}", resp.text());
-                    let ev = resp.entities(|ep| ep.s().s()).unwrap();
-                    assert_eq!(ev[0].to_string(), "GNU");
-                    assert_eq!(ev[1].to_string(), "Go");
-                    s = resp.text();
-                    break;
-                },
-                Err(Error::PollAgain) => (),
-                Err(e) => {
-                    println!("ERR: {:?}", e);
-                    break;
-                }
-            }
-
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-
-        assert_eq!(s, "GNU Go");
+        let resp = ctrl.wait_response(std::time::Duration::from_millis(500)).unwrap();
+        let ev = resp.entities(|ep| ep.s().s()).unwrap();
+        assert_eq!(ev[0].to_string(), "GNU");
+        assert_eq!(ev[1].to_string(), "Go");
+        assert_eq!(resp.text(), "GNU Go");
     }
 
 }
