@@ -154,7 +154,7 @@ We might find an agreement.
 # Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in WLambda by you, shall be licensed as GPLv3 or later,
+for inclusion in gtp-rs by you, shall be licensed as GPLv3 or later,
 without any additional terms or conditions.
 
 # Authors
