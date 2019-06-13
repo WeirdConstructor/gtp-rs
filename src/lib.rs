@@ -5,9 +5,10 @@
 A GTP (Go Text Protocol) controller implementation for Rust
 ===========================================================
 
-This crate implements currently just a parser and serializer for
-the Go Text Protocol as needed for writing a GTP controller to
-control a GTP engine.
+This crate implements a parser, serializer for the Go Text Protocol and an
+abstraction for an GTP engine controller.  You may just use the protocol
+handling parts if you have an alternative GTP engine controller implementation.
+But you are free to use the one provided by this crate.
 
 See also:
 

@@ -1,15 +1,41 @@
-GTP - A Go Text Protocol controller implementation for Rust
+A GTP (Go Text Protocol) controller implementation for Rust
 ===========================================================
 
-This crate implements currently just a parser and serializer for
-the Go Text Protocol as needed for writing a GTP controller to
-control a GTP engine.
+This crate implements a parser, serializer for the Go Text Protocol and an
+abstraction for an GTP engine controller.  You may just use the protocol
+handling parts if you have an alternative GTP engine controller implementation.
+But you are free to use the one provided by this crate.
 
 See also:
 
 * [GTP (Go Text Protocol)](https://www.lysator.liu.se/~gunnar/gtp/)
 
 # Usage
+
+A short overview of the API of this crate.
+
+## Talking with a GTP engine
+
+This is the basic usage on how to communicate with a GTP
+engine like `GNU Go`, `Leela Zero` or `KataGo`:
+
+```
+use std::time::Duration;
+use gtp::Command;
+use gtp::controller::Engine;
+
+let mut ctrl = Engine::new("/usr/bin/gnugo", &["--mode", "gtp"]);
+assert!(ctrl.start().is_ok());
+
+ctrl.send(Command::cmd("name", |e| e));
+let resp = ctrl.wait_response(Duration::from_millis(500)).unwrap();
+let ev = resp.entities(|ep| ep.s().s()).unwrap();
+assert_eq!(ev[0].to_string(), "GNU");
+assert_eq!(ev[1].to_string(), "Go");
+assert_eq!(resp.text(), "GNU Go");
+```
+
+## Encoding GTP commands and Decoding GTP responses
 
 Sending commands:
 
@@ -34,14 +60,22 @@ Receiving Responses:
 let mut rp = gtp::ResponseParser::new();
 rp.feed("= o");
 rp.feed("k\n\n");
-rp.feed("=\nA\nB\n\n= white b3\n\n");
+rp.feed("= A\nB\nC\n\n= white b3 b T19\n\n");
 
-assert_eq!(rp.get_response().unwrap().unwrap().text(), "ok");
-assert_eq!(rp.get_response().unwrap().unwrap().text(), "\nA\nB\n");
+assert_eq!(rp.get_response().unwrap().text(), "ok");
+assert_eq!(rp.get_response().unwrap().text(), "A\nB\nC");
 
 // And processing entities in the response:
+let ents = rp.get_response().unwrap()
+             .entities(|ep| ep.color().vertex().mv()).unwrap();
+assert_eq!(ents[0].to_string(), "w");
+assert_eq!(ents[1].to_string(), "B3");
+assert_eq!(ents[2].to_string(), "b T19");
 
-let mut ep = gtp::EntityParser::new(&rp.get_response().unwrap().unwrap().text());
+// And processing entities in the response more complicatedly:
+rp.feed("= white b3\n\n");
+
+let mut ep = gtp::EntityParser::new(&rp.get_response().unwrap().text());
 let res = ep.mv().result().unwrap();
 assert_eq!(res[0].to_string(), "w B3");
 
@@ -55,15 +89,10 @@ match res[0] {
 }
 ```
 
-# Future
-
-Currently I work on a GTP controller via tokio_process, as the dependency on tokio is quite heavy I
-would not like to burden this little crate with that. But what I could see is a GTP controller
-based on std::process which uses threads for communicating with the GTP engine in the background.
-
 # License
 
-This project is licensed under the GNU General Public License Version 3 or later.
+This project is licensed under the GNU General Public License Version 3 or
+later.
 
 ## Why GPL?
 
