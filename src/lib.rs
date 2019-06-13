@@ -144,6 +144,8 @@ without any additional terms or conditions.
 
 */
 
+mod controller;
+
 /// The color of a move
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Color {
@@ -563,6 +565,12 @@ impl Command {
         let mut cmd = Self::new(name);
         cmd.args(args);
         cmd
+    }
+
+    /// Shorthand for `Command::new_with_args`.
+    pub fn cmd<T>(name: &str, args: T) -> Command
+        where T: Fn(&mut EntityBuilder) -> &mut EntityBuilder {
+        new_with_args(name, args)
     }
 
     /// Sets the ID of the command.

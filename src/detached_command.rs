@@ -1,3 +1,6 @@
+// Copyright (c) 2019 Weird Constructor <weirdconstructor@gmail.com>
+// This is a part of gtp-rs. See README.md and COPYING for details.
+
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
