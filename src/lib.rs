@@ -15,6 +15,31 @@ See also:
 
 # Usage
 
+A short overview of the API of this crate.
+
+## Talking with a GTP engine
+
+This is the basic usage on how to communicate with a GTP
+engine like `GNU Go`, `Leela Zero` or `KataGo`:
+
+```
+use std::time::Duration;
+use gtp::Command;
+use gtp::controller::Engine;
+
+let mut ctrl = Engine::new("/usr/bin/gnugo", &["--mode", "gtp"]);
+assert!(ctrl.start().is_ok());
+
+ctrl.send(Command::cmd("name", |e| e));
+let resp = ctrl.wait_response(Duration::from_millis(500)).unwrap();
+let ev = resp.entities(|ep| ep.s().s()).unwrap();
+assert_eq!(ev[0].to_string(), "GNU");
+assert_eq!(ev[1].to_string(), "Go");
+assert_eq!(resp.text(), "GNU Go");
+```
+
+## Encoding GTP commands and Decoding GTP responses
+
 Sending commands:
 
 ```
@@ -66,12 +91,6 @@ match res[0] {
     _ => {},
 }
 ```
-
-# Future
-
-Currently I work on a GTP controller via tokio_process, as the dependency on tokio is quite heavy I
-would not like to burden this little crate with that. But what I could see is a GTP controller
-based on std::process which uses threads for communicating with the GTP engine in the background.
 
 # License
 

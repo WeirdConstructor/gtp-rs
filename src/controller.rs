@@ -1,8 +1,32 @@
 // Copyright (c) 2019 Weird Constructor <weirdconstructor@gmail.com>
 // This is a part of gtp-rs. See README.md and COPYING for details.
 
+/*!
+This module provides the abstraction of a GTP engine controller.
+
+See also [`Engine`](struct.Engine.html) for more information.
+*/
+
 const WAIT_POLL_DIV : u32 = 4;
 
+/// This represents the controller of an GTP Engine.
+///
+/// You establish a connection like this:
+/// ```
+/// use std::time::Duration;
+/// use gtp::Command;
+/// use gtp::controller::Engine;
+///
+/// let mut ctrl = Engine::new("/usr/bin/gnugo", &["--mode", "gtp"]);
+/// assert!(ctrl.start().is_ok());
+///
+/// ctrl.send(Command::cmd("name", |e| e));
+/// let resp = ctrl.wait_response(Duration::from_millis(500)).unwrap();
+/// let ev = resp.entities(|ep| ep.s().s()).unwrap();
+/// assert_eq!(ev[0].to_string(), "GNU");
+/// assert_eq!(ev[1].to_string(), "Go");
+/// assert_eq!(resp.text(), "GNU Go");
+/// ```
 pub struct Engine {
     cur_id:     u32,
     cmd:        String,
@@ -12,16 +36,29 @@ pub struct Engine {
     stderr:     String,
 }
 
+/// Error as returned by this module.
 #[derive(Debug)]
 pub enum Error {
+    /// This error is forwarded from the `detached_command`
+    /// module, it's about running the engine process.
     ProcessError(super::detached_command::Error),
+    /// This is an error when parsing responses from the engine.
+    /// It might indicate either a bug in this crate or the
+    /// Engine.
     ProtocolError(super::ResponseError),
+    /// Returned when no engine has been `start()`ed.
     NoHandle,
+    /// Returned when no responses were received from the engine yet.
+    /// It means you have to call methods like `poll_response()` or `wait_response()`
+    /// again.
     PollAgain,
 }
 
 impl Engine {
-    fn new(cmd: &str, args: &[&str]) -> Engine {
+    /// Creates a new Engine instance with the path
+    /// to the engine binary and the arguments to pass to
+    /// the engine.
+    pub fn new(cmd: &str, args: &[&str]) -> Engine {
         Engine {
             cmd:    cmd.to_string(),
             rp:     super::ResponseParser::new(),
@@ -32,7 +69,8 @@ impl Engine {
         }
     }
 
-    fn start(&mut self) -> Result<(), Error> {
+    /// Starts the engine in the background.
+    pub fn start(&mut self) -> Result<(), Error> {
         if self.handle.is_some() {
             self.handle.as_mut().unwrap().shutdown();
             self.handle = None;
@@ -51,7 +89,9 @@ impl Engine {
         }
     }
 
-    fn send(&mut self, mut cmd: super::Command) -> u32 {
+    /// Sends a command to the engine. Returns the
+    /// ID of the command.
+    pub fn send(&mut self, mut cmd: super::Command) -> u32 {
         if self.handle.is_none() { return 0; }
 
         self.cur_id += 1;
@@ -61,10 +101,13 @@ impl Engine {
         self.cur_id
     }
 
+    /// Returns the currently captured stderr output of the engine.
     #[allow(dead_code)]
-    fn clear_stderr(&mut self) { self.stderr = String::from(""); }
+    pub fn stderr(&self) -> String { self.stderr.clone() }
+
+    /// Clears the up to now returned output of the engine.
     #[allow(dead_code)]
-    fn stderr(&self) -> String { self.stderr.clone() }
+    pub fn clear_stderr(&mut self) { self.stderr = String::from(""); }
 
     /// This method waits for a maximum amount of time for a response
     /// from the GTP engine.
@@ -120,6 +163,7 @@ impl Engine {
     }
 }
 
+#[allow(unused_imports)]
 use super::Command;
 
 #[cfg(test)]

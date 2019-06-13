@@ -1,6 +1,23 @@
 // Copyright (c) 2019 Weird Constructor <weirdconstructor@gmail.com>
 // This is a part of gtp-rs. See README.md and COPYING for details.
 
+/*!
+An abstraction for running background processes with a line based
+I/O protocol on stdin/stdout.
+
+It uses 3 threads for I/O of the child stdin/stdout/stderr and
+some std::sync::mpsc channels for synchronization. It's not the
+fastest as `tokio_process` would provide a non-blocking
+interface to child processes (which is hopefully more
+efficiently implemented).
+
+Unfortunately at the time of this writing I only have prototype code for
+tokio_process and the futures don't really make the solution easier to read and
+maintain than this one. I also believe, that the bottleneck of todays GTP
+engines is not the interface with the GTP controller. So this might
+never gets optimized.
+*/
+
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
